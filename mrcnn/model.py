@@ -37,15 +37,18 @@ assert LooseVersion(keras.__version__) >= LooseVersion('2.0.8')
 def se_block(input_tensor, reduction=16, name=None):
     """Squeeze-and-Excitation block for channel attention."""
     channel_axis = -1
-    filters = input_tensor.shape[channel_axis]
+    filters = int(input_tensor.shape[channel_axis])  # ✅ cast obligatoire ici
     se_shape = (1, 1, filters)
 
     se = KL.GlobalAveragePooling2D()(input_tensor)
     se = KL.Reshape(se_shape)(se)
-    se = KL.Dense(filters // reduction, activation='relu', kernel_initializer='he_normal', use_bias=False)(se)
-    se = KL.Dense(filters, activation='sigmoid', kernel_initializer='he_normal', use_bias=False)(se)
+    se = KL.Dense(filters // reduction, activation='relu',
+                  kernel_initializer='he_normal', use_bias=False)(se)
+    se = KL.Dense(filters, activation='sigmoid',
+                  kernel_initializer='he_normal', use_bias=False)(se)
     x = KL.Multiply()([input_tensor, se])
     return x
+
 
 ############################################################
 #  Focal Loss
