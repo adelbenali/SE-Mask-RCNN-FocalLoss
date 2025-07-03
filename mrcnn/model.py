@@ -1084,25 +1084,42 @@ def rpn_bbox_loss_graph(config, target_bbox, rpn_match, rpn_bbox):
     return loss
 
 
-def mrcnn_class_loss_graph(target_class_ids, pred_class_logits, active_class_ids):
-    """Loss for the classifier head of Mask RCNN using Focal Loss."""
-    target_class_ids = tf.cast(target_class_ids, 'int64')
+def mrcnn_class_loss_graph(target_class_ids, pred_class_logits, active_class_ids, gamma=2.0, alpha=0.25):
+    """Focal Loss for the classifier head of Mask RCNN."""
+    target_class_ids = tf.cast(target_class_ids, 'int64')  # [batch, num_rois]
 
-    # One-hot encode ground truth
-    one_hot_labels = tf.one_hot(target_class_ids, depth=tf.shape(pred_class_logits)[-1])
-    pred_softmax = tf.nn.softmax(pred_class_logits)
+    # One-hot encode des labels
+    num_classes = tf.shape(pred_class_logits)[-1]
+    target_class_ids_oh = tf.one_hot(target_class_ids, depth=num_classes)  # [batch, num_rois, num_classes]
 
-    # Apply Focal Loss
-    raw_loss = focal_loss(gamma=2.0, alpha=0.25)(one_hot_labels, pred_softmax)
+    # Softmax
+    pred_probs = tf.nn.softmax(pred_class_logits)  # [batch, num_rois, num_classes]
 
-    # Determine active predictions
-    pred_class_ids = tf.argmax(pred_class_logits, axis=2)
-    pred_active = tf.gather(active_class_ids[0], pred_class_ids)
+    # Proba prédite pour la vraie classe
+    pt = tf.reduce_sum(target_class_ids_oh * pred_probs, axis=-1)  # [batch, num_rois]
+    focal_weight = alpha * tf.pow(1.0 - pt, gamma)
 
-    # Apply active mask
-    loss = raw_loss * tf.cast(pred_active, tf.float32)
-    loss = tf.reduce_sum(loss) / tf.reduce_sum(pred_active)
-    return loss
+    focal_loss = -focal_weight * tf.log(tf.maximum(pt, 1e-8))  # [batch, num_rois]
+
+    # Masque active
+    pred_class_ids = tf.argmax(pred_class_logits, axis=-1, output_type=tf.int32)  # [batch, num_rois]
+
+    # Active class mask pour chaque prédiction
+    batch_size = tf.shape(pred_class_logits)[0]
+    roi_count = tf.shape(pred_class_logits)[1]
+
+    batch_ids = tf.reshape(tf.range(batch_size), [batch_size, 1])
+    batch_ids = tf.tile(batch_ids, [1, roi_count])  # [batch, num_rois]
+    gather_indices = tf.stack([batch_ids, pred_class_ids], axis=-1)  # [batch, num_rois, 2]
+
+    pred_active = tf.gather_nd(active_class_ids, gather_indices)  # [batch, num_rois]
+
+    # Appliquer le masque
+    focal_loss = tf.where(tf.equal(pred_active, 1), focal_loss, tf.zeros_like(focal_loss))
+
+    # Moyenne
+    return tf.reduce_sum(focal_loss) / tf.maximum(tf.reduce_sum(tf.cast(pred_active, tf.float32)), 1.0)
+
 
 def mrcnn_bbox_loss_graph(target_bbox, target_class_ids, pred_bbox):
     """Loss for Mask R-CNN bounding box refinement.
